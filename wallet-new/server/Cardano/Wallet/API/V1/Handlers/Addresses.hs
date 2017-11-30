@@ -4,20 +4,28 @@ module Cardano.Wallet.API.V1.Handlers.Addresses where
 
 import           Universum
 
+import           Pos.Crypto (emptyPassphrase)
+import qualified Pos.Wallet.Web.Account as V0
+import qualified Pos.Wallet.Web.Methods as V0
+
 import           Cardano.Wallet.API.Request
 import           Cardano.Wallet.API.Response
 import qualified Cardano.Wallet.API.V1.Addresses as Addresses
+import           Cardano.Wallet.API.V1.Migration
 import           Cardano.Wallet.API.V1.Types
 
 import           Servant
 import           Test.QuickCheck (arbitrary, generate, vectorOf)
 
-handlers :: Server Addresses.API
+handlers
+    :: (MonadThrow m, V0.MonadWalletLogic ctx m)
+    => ServerT Addresses.API m
 handlers =  listAddresses
        :<|> newAddress
 
-listAddresses :: RequestParams
-              -> Handler (WalletResponse [Address])
+listAddresses
+    :: MonadIO m
+    => RequestParams -> m (WalletResponse [Address])
 listAddresses RequestParams {..} = do
     addresses <- liftIO $ generate (vectorOf 2 arbitrary)
     return WalletResponse {
@@ -31,5 +39,11 @@ listAddresses RequestParams {..} = do
                       }
             }
 
-newAddress :: Address -> Handler (WalletResponse Address)
-newAddress a = return $ single a
+newAddress
+    :: (MonadThrow m, V0.MonadWalletLogic ctx m)
+    => NewAddress -> m WalletAddress
+newAddress NewAddress {..} = do
+    let password = fromMaybe emptyPassphrase newaddrSpendingPassword
+    accountId <- migrate (newaddrWalletId, newaddrAccountId)
+    V0.newAddress V0.RandomSeed password accountId
+        >>= migrate

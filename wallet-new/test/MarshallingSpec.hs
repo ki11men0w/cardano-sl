@@ -2,7 +2,6 @@ module MarshallingSpec where
 
 import           Universum
 
-import           Cardano.Wallet.API.Response
 import           Cardano.Wallet.API.V1.Errors (WalletError)
 import           Cardano.Wallet.API.V1.Types
 import           Cardano.Wallet.Orphans ()
@@ -28,6 +27,7 @@ spec = describe "Marshalling & Unmarshalling" $ do
         aesonRoundtripProp @Payment Proxy
         aesonRoundtripProp @PaymentDistribution Proxy
         aesonRoundtripProp @NewWallet Proxy
+        aesonRoundtripProp @NewAddress Proxy
         aesonRoundtripProp @Core.Coin Proxy
         aesonRoundtripProp @PassPhrase Proxy
         aesonRoundtripProp @TransactionGroupingPolicy Proxy

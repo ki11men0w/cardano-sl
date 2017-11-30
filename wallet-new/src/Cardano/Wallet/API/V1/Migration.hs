@@ -81,6 +81,15 @@ instance Migrate V0.CWallet V1.Wallet where
                   <*> eitherMigrate cwAmount
 
 --
+instance Migrate V0.CAddress V1.WalletAddress where
+    eitherMigrate V0.CAddress{..} = do
+        addrId <- eitherMigrate cadId
+        addrBalance <- eitherMigrate cadAmount
+        let addrUsed = cadIsUsed
+        let addrChangeAddress = cadIsChange
+        return V1.WalletAddress{..}
+
+--
 instance Migrate V0.CWalletAssurance V1.AssuranceLevel where
     eitherMigrate V0.CWAStrict = pure V1.StrictAssurance
     eitherMigrate V0.CWANormal = pure V1.NormalAssurance
@@ -100,7 +109,11 @@ instance Migrate (V0.CId V0.Wal) V1.WalletId where
     eitherMigrate (V0.CId (V0.CHash h)) = pure (V1.WalletId h)
 
 instance Migrate V1.WalletId (V0.CId V0.Wal) where
-    eitherMigrate (V1.WalletId h) = pure (V0.CId (V0.CHash h))
+    eitherMigrate (V1.WalletId h) = pure $ V0.CId (V0.CHash h)
+
+--
+instance Migrate (V0.CId V0.Addr) V1.Address where
+    eitherMigrate = first Errors.MigrationFailed . V0.decodeCType
 
 -- | Migrates to a V1 `SyncProgress` by computing the percentage as
 -- coded here: https://github.com/input-output-hk/daedalus/blob/master/app/stores/NetworkStatusStore.js#L108
@@ -127,10 +140,6 @@ instance Migrate V0.CAccount V1.Account where
                   <*> eitherMigrate caId
                   -- ^ accWalletId
 
---
--- Following instances are friendly borrowed from @martoon's PR https://github.com/input-output-hk/cardano-sl/pull/2008
--- TODO (jk): Use instances of his PR when it has been merged
-
 -- in old API 'V0.AccountId' supposed to carry both wallet id and derivation index
 instance Migrate (V1.WalletId, V1.AccountId) V0.AccountId where
     eitherMigrate (walId, accId) =
@@ -142,10 +151,6 @@ instance Migrate V0.AccountId (V1.WalletId, V1.AccountId) where
 
 instance Migrate V0.CAccountId V0.AccountId where
     eitherMigrate = first Errors.MigrationFailed . V0.decodeCType
-
---
--- #end of TODO (jk) ^
---
 
 instance Migrate V0.CAccountId V1.AccountId where
     eitherMigrate cAccId = do
@@ -159,6 +164,7 @@ instance Migrate V0.CAccountId V1.WalletId where
         (walletId, _) :: (V1.WalletId, V1.AccountId) <- eitherMigrate oldAccountId
         pure walletId
 
+--
 instance Migrate V0.CAddress Core.Address where
        eitherMigrate V0.CAddress {..} =
           either (\_ -> Left $ Errors.MigrationFailed "Error migrating V0.CAddress -> Core.Address failed.")
