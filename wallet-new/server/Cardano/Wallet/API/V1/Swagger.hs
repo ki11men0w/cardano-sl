@@ -207,13 +207,13 @@ instance ToDocs Account where
 
 instance ToDocs WalletAddress where
   readOnlyFields   = readOnlyFieldsFromJSON
-  descriptionFor _ = "An Address."
+  descriptionFor _ = "An Address with meta information related to it."
 
 instance ToDocs AccountUpdate where
   descriptionFor _ = updateDescr (Proxy @Account)
 
 instance ToDocs Address where
-  descriptionFor _ = "An Address ID."
+  descriptionFor _ = "A base58-encoded Address."
 
 instance ToDocs WalletId where
   descriptionFor _ = "A Wallet ID."

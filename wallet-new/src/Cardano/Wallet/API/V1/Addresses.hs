@@ -13,4 +13,4 @@ type API = "addresses" :> WalletRequestParams
                        :> Get '[JSON] (WalletResponse [Address])
       :<|> "addresses" :> ReqBody '[JSON] NewAddress
                        :> Summary "Creates a new Address."
-                       :> Post '[JSON] WalletAddress
+                       :> Post '[JSON] (WalletResponse WalletAddress)
