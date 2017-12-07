@@ -20,7 +20,6 @@ import           Control.Exception.Safe (tryAny)
 import           Control.Lens (makeLensesWith)
 import qualified Data.ByteString.Lazy as BS.L
 import           Data.List (isSuffixOf)
-import           Data.Maybe (fromJust)
 import qualified Data.Text.IO as T
 import           Data.Time.Units (Second, convertUnit)
 import           Data.Version (showVersion)
@@ -34,8 +33,7 @@ import           System.Environment (getExecutablePath)
 import           System.Exit (ExitCode (..))
 import           System.FilePath ((</>))
 import qualified System.IO as IO
-import           System.Process (ProcessHandle, runInteractiveProcess,
-                                 waitForProcess)
+import           System.Process (ProcessHandle, waitForProcess)
 import qualified System.Process as Process
 import           System.Timeout (timeout)
 import           System.Wlog (logError, logInfo, logNotice, logWarning)
@@ -99,8 +97,7 @@ data LauncherOptions = LO
 -- | The concrete monad where everything happens
 type M a = (HasConfigurations, HasCompileInfo) => Log.LoggerNameBox IO a
 
-data LType = LInfo | LNotice | LWarning | LError
-data NodeType = NWallet | NNode
+data Executable = EWallet | ENode | EUpdater
 
 optionsParser :: Parser LauncherOptions
 optionsParser = do
@@ -126,8 +123,7 @@ optionsParser = do
         metavar "PATH"
     loNodeLogPath <- optional $ textOption $
         long    "node-log-path" <>
-        help    ("File where node stdout/err will be redirected " <>
-                 "(def: temp file).") <>
+        help    "File where node stdout/err will be redirected " <>
         metavar "PATH"
 
     -- Wallet-related args
@@ -145,8 +141,7 @@ optionsParser = do
 
     loWalletLogPath <- optional $ textOption $
         long    "wallet-log-path" <>
-        help    ("File where wallet stdout/err will be redirected " <>
-                 "(def: temp file).") <>
+        help    "File where wallet stdout/err will be redirected " <>
         metavar "PATH"
     -- Update-related args
     loUpdaterPath <- textOption $
@@ -459,9 +454,9 @@ runUpdater ndbp (path, args, runnerPath, mUpdateArchivePath) = do
 
 runUpdaterProc :: HasConfigurations => FilePath -> [Text] -> M ExitCode
 runUpdaterProc path args = liftIO $ do
-    let cr = createProcPipe path args
+    let cr = createProc Process.CreatePipe path args
     phvar <- newEmptyMVar
-    system' phvar cr mempty
+    system' phvar cr mempty EUpdater
 
 writeWindowsUpdaterRunner :: FilePath -> M ()
 writeWindowsUpdaterRunner runnerPath = liftIO $ do
@@ -492,30 +487,18 @@ spawnNode (path, args, mbLogPath) = do
     logNotice "Starting the node"
     -- We don't explicitly close the `logHandle` here,
     -- but this will be done when we run the `CreateProcess` built
-    -- by proc later is `system'`:
+    -- by proc later in `system'`:
     -- http://hackage.haskell.org/package/process-1.6.1.0/docs/System-Process.html#v:createProcess
-    (_, logHandle) <- liftIO $ case mbLogPath of
+    cr <- liftIO $ case mbLogPath of
         Just lp -> do
-            createDirectoryIfMissing True (directory lp)
-            (lp,) <$> openFile lp AppendMode
-        Nothing -> do
-            let cr = createProcInherit path args
-            (_, stdO, stdE, pid) <- Process.createProcess cr
-            case stdO of
-                Just o -> do
-                    _ <- asyncLog o (fromJust stdE) pid NNode
-                    return (path, o)
-                Nothing -> do
-                    return (path, stdin)
-    -- TODO (jmitchell): Find a safe, reliable way to print `logPath`. Cardano
-    -- fails when it prints unicode characters. In the meantime, don't print it.
-    -- See DAEF-12.
-
-    -- printf ("Redirecting node's stdout and stderr to "%fp%"\n") logPath
-    liftIO $ IO.hSetBuffering logHandle IO.LineBuffering
-    let cr = createProcHandle path args logHandle
+            createLogFileProc path args lp
+            -- TODO (jmitchell): Find a safe, reliable way to print `logPath`. Cardano
+            -- fails when it prints unicode characters. In the meantime, don't print it.
+            -- See DAEF-12.
+            -- printf ("Redirecting node's stdout and stderr to "%fp%"\n") logPath
+        Nothing -> return $ createProc Process.CreatePipe path args
     phvar <- newEmptyMVar
-    asc <- async (system' phvar cr mempty)
+    asc <- async (system' phvar cr mempty ENode)
     mbPh <- liftIO $ timeout 10000000 (takeMVar phvar)
     case mbPh of
         Nothing -> do
@@ -527,68 +510,47 @@ spawnNode (path, args, mbLogPath) = do
 
 runWallet :: Bool -> (FilePath, [Text], Maybe FilePath) -> M ExitCode
 runWallet shouldLog (path, args, mLogPath) = do
-    customLogger LInfo NWallet "Starting the wallet"
+    logNotice "Starting the wallet"
     phvar <- newEmptyMVar
     liftIO $ case mLogPath of
         Just lp -> do
-            createDirectoryIfMissing True (directory lp)
-            (_, logHandle) <- (lp,) <$> openFile lp AppendMode
-            liftIO $ IO.hSetBuffering logHandle IO.LineBuffering
-            let cr = createProcHandle path args logHandle
-            system' phvar cr mempty
+            cr <- createLogFileProc path args lp
+            system' phvar cr mempty EWallet
         Nothing ->
-           if shouldLog then
-               liftIO $ do
-               let cr = createProcInherit path args
-               system' phvar cr mempty
-           else
-              liftIO $ do
-              (_, _, _, pid) <- runInteractiveProcess path (map toString args) Nothing Nothing
-              waitForProcess pid
+           let cr = if shouldLog then
+                        Process.CreatePipe
+                    else Process.NoStream
+           in system' phvar (createProc cr path args) mempty EWallet
 
-createProcInherit :: FilePath -> [Text] -> Process.CreateProcess
-createProcInherit path args =
-    (Process.proc (toString path) (map toString args))
-        { Process.std_in = Process.CreatePipe
-        , Process.std_out = Process.Inherit
-        , Process.std_err = Process.Inherit
-        }
+createLogFileProc :: FilePath -> [Text] -> FilePath -> IO Process.CreateProcess
+createLogFileProc path args lp = do
+    _ <- createDirectoryIfMissing True (directory lp)
+    (_, logHandle) <- (lp,) <$> openFile lp AppendMode
+    liftIO $ IO.hSetBuffering logHandle IO.LineBuffering
+    return $ createProc (Process.UseHandle logHandle) path args
 
-createProcHandle :: FilePath -> [Text] -> Handle -> Process.CreateProcess
-createProcHandle path args pHandle =
-    (Process.proc (toString path) (map toString args))
-        { Process.std_in = Process.CreatePipe
-        , Process.std_out = Process.UseHandle pHandle
-        , Process.std_err = Process.UseHandle pHandle
-        }
+createProc :: Process.StdStream -> FilePath -> [Text] -> Process.CreateProcess
+createProc stdStream path args =
+    (Process.proc path (map toString args))
+            { Process.std_in = Process.CreatePipe
+            , Process.std_out = stdStream
+            , Process.std_err = stdStream
+            }
 
-createProcPipe :: FilePath -> [Text] -> Process.CreateProcess
-createProcPipe path args =
-    (Process.proc (toString path) (map toString args))
-        { Process.std_in = Process.CreatePipe
-        , Process.std_out = Process.CreatePipe
-        , Process.std_err = Process.CreatePipe
-        }
-
-asyncLog :: Handle -> Handle -> ProcessHandle -> NodeType -> IO ExitCode
+asyncLog :: Handle -> Handle -> ProcessHandle -> Executable -> IO ExitCode
 asyncLog stdO stdE pH nt = do
-    withAsync (forever $ IO.hGetLine stdO >>= customLogger LInfo nt) $ \_ ->
-        withAsync (forever $ IO.hGetLine stdE >>= customLogger LError nt) $ \_ -> do
+    withAsync (forever $ T.hGetLine stdO >>= customLogger nt) $ \_ ->
+        withAsync (forever $ T.hGetLine stdE >>= customLogger nt) $ \_ -> do
         waitForProcess pH
 
-
-customLogger :: Log.CanLog m => LType -> NodeType -> String -> m ()
-customLogger logType logName logStr = do
-    Log.usingLoggerName (Log.LoggerName logNameStr) $
-        case logType of
-            LNotice  -> logNotice $ toText logStr
-            LWarning -> logError  $ toText logStr
-            LError   -> logError  $ toText logStr
-            _         -> logInfo   $ toText logStr
+customLogger :: Executable -> Text -> IO ()
+customLogger loggerName logStr = do
+    putStrLn $ logNameStr <> logStr
     where
-        logNameStr = case logName of
-            NNode -> "node"
-            NWallet -> "wallet"
+        logNameStr = case loggerName of
+            ENode    -> "[node]"
+            EWallet  -> "[wallet]"
+            EUpdater -> "[updater]"
 
 ----------------------------------------------------------------------------
 -- Working with the report server
@@ -628,18 +590,26 @@ system'
     -- ^ Command
     -> [Text]
     -- ^ Lines of standard input
+    -> Executable
+    -- ^ node/wallet log output
     -> io ExitCode
     -- ^ Exit code
-system' phvar p sl = liftIO (do
+system' phvar p sl nt = liftIO (do
     let open = do
-            (m, stdO, stdE, ph) <- Process.createProcess p
+            (hIn, stdO, stdE, ph) <- Process.createProcess p
             putMVar phvar ph
-            case m of
-                Just hIn -> do
-                    _ <- asyncLog (fromJust stdO) (fromJust stdE) ph NNode
-                    IO.hSetBuffering hIn IO.LineBuffering
+            case ((hIn, stdO, stdE)) of
+                ((Just hndl), (Just o), (Just e)) -> do
+                    -- log certain kind of processes since
+                    -- inherited ones might create infinite loop
+                    case (Process.std_out p, Process.std_err p) of
+                        (Process.CreatePipe, Process.CreatePipe) -> do
+                            _ <- asyncLog o e ph nt
+                            return ()
+                        _ -> return ()
+                    IO.hSetBuffering hndl IO.LineBuffering
                 _        -> return ()
-            return (m, ph)
+            return (hIn, ph)
 
     -- Prevent double close
     mvar <- newMVar False
