@@ -1,0 +1,65 @@
+# Path to the node executable
+nodePath: .stack-work/install/x86_64-linux/lts-9.1/8.0.2/bin/cardano-node
+
+# Arguments to be passed to the node
+nodeArgs:
+  - "--update-server"
+  - "http://localhost:3001"
+  - "--update-latest-path"
+  - "updateDownloaded.tar"
+  - "--listen"
+  - "127.0.0.1:3004"
+  - "--kademlia-id"
+  - "a_P8zb6fNP7I2H54FtGuhqxaMDAwMDAwMDAwMDAwMDA="
+  - "--rebuild-db"
+  - "--wallet"
+  - "--web-port"
+  - "8080"
+  - "--wallet-port"
+  - "8090"
+  - "--wallet-rebuild-db"
+
+# Path to directory with all DBs used by the node
+nodeDbPath: run/node-db0
+
+# Path to log config that will be used by the node
+nodeLogConfig: scripts/log-templates/log-config.yaml
+
+# File where node stdout/err will be redirected (def: temp file)
+# nodeLogPath: node.log
+
+# Path to the wallet frontend executable (e. g. Daedalus)
+# walletPath: binaries_v000/daedalus
+
+# Arguments to be passed to the wallet frontend executable.
+walletArgs: []
+
+# Path to the updater executable.
+updaterPath: binaries_v000/cardano-updater
+
+# Arguments to be passed to the updater.
+updaterArgs:
+  - "dir"
+  - "binaries_v000"
+
+# Path to the update archive, it will be passed to the updater.
+updateArchive: updateDownloaded.tar
+
+# Path to write the Windows batch file executing updater.
+# updateWindowsRunner:
+
+# How much to wait for the node to exit before killing it
+nodeTimeoutSec: 5
+
+# Where to send logs in case of failure.
+# reportServer:
+
+# Where to put launcher logs (def: console only).
+# launcherLogsPrefix:
+
+configuration:
+  filePath: lib/configuration.yaml
+  key: default
+  systemStart: 1512847931
+  seed:
+
